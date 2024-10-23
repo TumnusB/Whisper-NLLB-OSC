@@ -35,6 +35,8 @@ whisper_pipe = pipeline(
     feature_extractor=processor.feature_extractor,
     torch_dtype=torch_dtype,
     device=device,
+    return_timestamps=True
+    
 )
 
 tokenizer = AutoTokenizer.from_pretrained("facebook/nllb-200-distilled-600M")
