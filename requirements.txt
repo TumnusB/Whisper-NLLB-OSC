@@ -1,7 +1,9 @@
 setuptools
+wheel
 pyaudio
+transformers
 SpeechRecognition
---extra-index-url https://download.pytorch.org/whl/cu116
-torch
 numpy
+torch --index-url https://download.pytorch.org/whl/cu124
 git+https://github.com/openai/whisper.git
+python-osc
