@@ -1,24 +1,55 @@
-#! python3.7
-
 import argparse
 import os
 import numpy as np
 import speech_recognition as sr
-import whisper
-import torch
-
-from datetime import datetime, timedelta
+import datetime
+from datetime import timedelta
 from queue import Queue
 from time import sleep
 from sys import platform
+from pythonosc import udp_client
 
+import torch
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+from datasets import load_dataset
+
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+model_id = "openai/whisper-large-v3-turbo"
+
+model = AutoModelForSpeechSeq2Seq.from_pretrained(
+    model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
+)
+
+model.generation_config.language = "<|en|>"
+
+model.to(device)
+
+processor = AutoProcessor.from_pretrained(model_id)
+
+whisper_pipe = pipeline(
+    "automatic-speech-recognition",
+    model=model,
+    tokenizer=processor.tokenizer,
+    feature_extractor=processor.feature_extractor,
+    torch_dtype=torch_dtype,
+    device=device,
+)
+
+tokenizer = AutoTokenizer.from_pretrained("facebook/nllb-200-distilled-600M")
+model = AutoModelForSeq2SeqLM.from_pretrained("facebook/nllb-200-distilled-600M")
+
+model.to(device)
+
+nllb_pipe = pipeline('translation', model=model, tokenizer=tokenizer, src_lang="eng_Latn", tgt_lang='jpn_Jpan', max_length = 400, device=device)
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="medium", help="Model to use",
-                        choices=["tiny", "base", "small", "medium", "large"])
-    parser.add_argument("--non_english", action='store_true',
-                        help="Don't use the english model.")
+    parser = argparse.ArgumentParser()  
+    parser.add_argument("--ip", default="127.0.0.1",
+        help="The ip of the OSC server")
+    parser.add_argument("--port", type=int, default=1337,
+        help="The port the OSC server is listening on")
     parser.add_argument("--energy_threshold", default=1000,
                         help="Energy level for mic to detect.", type=int)
     parser.add_argument("--record_timeout", default=2,
@@ -31,6 +62,8 @@ def main():
                             help="Default microphone name for SpeechRecognition. "
                                  "Run this with 'list' to view available Microphones.", type=str)
     args = parser.parse_args()
+
+    client = udp_client.SimpleUDPClient(args.ip, args.port)
 
     # The last time a recording was retrieved from the queue.
     phrase_time = None
@@ -58,13 +91,7 @@ def main():
                     break
     else:
         source = sr.Microphone(sample_rate=16000)
-
-    # Load / Download model
-    model = args.model
-    if args.model != "large" and not args.non_english:
-        model = model + ".en"
-    audio_model = whisper.load_model(model)
-
+    
     record_timeout = args.record_timeout
     phrase_timeout = args.phrase_timeout
 
@@ -89,9 +116,11 @@ def main():
     # Cue the user that we're ready to go.
     print("Model loaded.\n")
 
+    audio_data = b''
+
     while True:
         try:
-            now = datetime.utcnow()
+            now = datetime.datetime.now()
             # Pull raw recorded audio from the queue.
             if not data_queue.empty():
                 phrase_complete = False
@@ -99,11 +128,12 @@ def main():
                 # Clear the current working audio buffer to start over with the new data.
                 if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
                     phrase_complete = True
+                    audio_data = b''
                 # This is the last time we received new audio data from the queue.
                 phrase_time = now
                 
                 # Combine audio data from queue
-                audio_data = b''.join(data_queue.queue)
+                audio_data = audio_data + b''.join(data_queue.queue)
                 data_queue.queue.clear()
                 
                 # Convert in-ram buffer to something the model can use directly without needing a temp file.
@@ -112,32 +142,18 @@ def main():
                 audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
 
                 # Read the transcription.
-                result = audio_model.transcribe(audio_np, fp16=torch.cuda.is_available())
-                text = result['text'].strip()
-
-                # If we detected a pause between recordings, add a new item to our transcription.
-                # Otherwise edit the existing one.
-                if phrase_complete:
-                    transcription.append(text)
-                else:
-                    transcription[-1] = text
-
-                # Clear the console to reprint the updated transcription.
-                os.system('cls' if os.name=='nt' else 'clear')
-                for line in transcription:
-                    print(line)
-                # Flush stdout.
-                print('', end='', flush=True)
-            else:
-                # Infinite loops are bad for processors, must sleep.
-                sleep(0.25)
+                Audio_Text = whisper_pipe(audio_np)
+                english = Audio_Text['text'].strip()
+                print(english)
+                print()
+                # Translate the transcription.
+                japanese = nllb_pipe(english)[0]['translation_text']
+                print(japanese)
+                 
+                client.send_message("/whisper", [english,japanese])
+            
         except KeyboardInterrupt:
             break
-
-    print("\n\nTranscription:")
-    for line in transcription:
-        print(line)
-
-
+        
 if __name__ == "__main__":
     main()
