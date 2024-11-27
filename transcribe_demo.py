@@ -36,13 +36,16 @@ whisper_pipe = pipeline(
     torch_dtype=torch_dtype,
     device=device,
     return_timestamps=True
-    
 )
 
 tokenizer = AutoTokenizer.from_pretrained("facebook/nllb-200-distilled-600M")
 model = AutoModelForSeq2SeqLM.from_pretrained("facebook/nllb-200-distilled-600M")
 
 model.to(device)
+
+ #English - eng_Latn
+ #Japanese - jpn_Jpan
+ #Korean - kor_Hang
 
 nllb_pipe = pipeline('translation', model=model, tokenizer=tokenizer, src_lang="eng_Latn", tgt_lang='jpn_Jpan', max_length = 400, device=device)
 
