@@ -11,7 +11,6 @@ from pythonosc import udp_client
 
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
-from datasets import load_dataset
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
