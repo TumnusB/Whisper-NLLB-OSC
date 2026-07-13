@@ -5,55 +5,70 @@ import speech_recognition as sr
 import datetime
 from datetime import timedelta
 from queue import Queue
-from time import sleep
 from sys import platform
 from pythonosc import udp_client
-
+import transformers
+import ctranslate2
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
-from datasets import load_dataset
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-model_id = "openai/whisper-large-v3-turbo"
+distil_small = "distil-whisper/distil-small.en"
+whisper_large_v3_turbo = "openai/whisper-large-v3-turbo"
+whisper_medium = "openai/whisper-medium.en"
+distil_whisper = "distil-whisper/distil-large-v3"
+whisper_tiny = "openai/whisper-tiny.en"
 
 model = AutoModelForSpeechSeq2Seq.from_pretrained(
-    model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
+    whisper_large_v3_turbo, 
+    dtype=torch_dtype, 
+    low_cpu_mem_usage=True, 
+    use_safetensors=True
 )
-
-model.generation_config.language = "<|en|>"
 
 model.to(device)
 
-processor = AutoProcessor.from_pretrained(model_id)
+# 2. Load the tokenizer with the explicit space clean-up flag
+tokenizer = AutoTokenizer.from_pretrained(
+    whisper_large_v3_turbo, 
+    clean_up_tokenization_spaces=False
+)
 
+# 3. Load the processor for feature extraction
+processor = AutoProcessor.from_pretrained(whisper_large_v3_turbo)
+
+# 4. Pass all explicit objects into the pipeline
 whisper_pipe = pipeline(
     "automatic-speech-recognition",
     model=model,
-    tokenizer=processor.tokenizer,
-    feature_extractor=processor.feature_extractor,
+    tokenizer=tokenizer,                             # <-- Enforces your flag
+    feature_extractor=processor.feature_extractor,   # <-- For audio processing
     torch_dtype=torch_dtype,
     device=device,
-    return_timestamps=True
 )
 
-tokenizer = AutoTokenizer.from_pretrained("facebook/nllb-200-distilled-600M")
-model = AutoModelForSeq2SeqLM.from_pretrained("facebook/nllb-200-distilled-600M")
+translator = ctranslate2.Translator("nllb-200-distilled-600M", device=device)
+tokenizer = transformers.AutoTokenizer.from_pretrained("facebook/nllb-200-distilled-600M")
 
-model.to(device)
+def translate_text(text, src_lang="eng_Latn", tgt_lang="jpn_Jpan"):
+    source = tokenizer.convert_ids_to_tokens(tokenizer.encode(text))
+    target_prefix = [tgt_lang]
+    results = translator.translate_batch([source], target_prefix=[target_prefix])
+    target = results[0].hypotheses[0][1:]
+
+    return tokenizer.decode(tokenizer.convert_tokens_to_ids(target))
 
  #English - eng_Latn
  #Japanese - jpn_Jpan
  #Korean - kor_Hang
 
-nllb_pipe = pipeline('translation', model=model, tokenizer=tokenizer, src_lang="eng_Latn", tgt_lang='jpn_Jpan', max_length = 400, device=device)
-
 def main():
     parser = argparse.ArgumentParser()  
     parser.add_argument("--ip", default="127.0.0.1",
         help="The ip of the OSC server")
-    parser.add_argument("--port", type=int, default=1337,
+    parser.add_argument("--port", type=int, default=9000,
         help="The port the OSC server is listening on")
     parser.add_argument("--energy_threshold", default=1000,
                         help="Energy level for mic to detect.", type=int)
@@ -122,6 +137,7 @@ def main():
     print("Model loaded.\n")
 
     audio_data = b''
+    
 
     while True:
         try:
@@ -149,13 +165,19 @@ def main():
                 # Read the transcription.
                 Audio_Text = whisper_pipe(audio_np)
                 english = Audio_Text['text'].strip()
-                print(english)
-                print()
-                # Translate the transcription.
-                japanese = nllb_pipe(english)[0]['translation_text']
-                print(japanese)
-                 
-                client.send_message("/whisper", [english,japanese])
+                print("English: \n" + english)
+                
+                print("Translating to Japanese...")
+
+                japanese = translate_text(english, src_lang="eng_Latn", tgt_lang="jpn_Jpan")
+            
+                print("Japanese: \n" + japanese)
+                
+                client.send_message("/chatbox/input", [japanese,True,False]) 
+                
+                print("Message sent to chatbox.")
+                
+                #client.send_message("/whisper", [english])
             
         except KeyboardInterrupt:
             break
